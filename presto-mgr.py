@@ -12,18 +12,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 INSTALL_PATH="/mnt/yic/presto-server-0.248/"
 CATALOG_PATH="/mnt/yic/presto-server-0.248/catalog"
-
+CLI_PATH="/mnt/yic/presto-cli"
 PRESTO_MGR="__presto_mgr"
-
-# def gen_worker(config: config.Config):
-#     'java' '-cp' '/mnt/yic/presto-server-0.248/lib/*' '-server' '-Xmx16G' '-XX:+UseG1GC' '-XX:G1HeapRegionSize=32M' '-XX:+UseGCOverheadLimit' '-XX:+ExplicitGCInvokesConcurrent' '-XX:+HeapDumpOnOutOfMemoryError' '-XX:+ExitOnOutOfMemoryError' '-Djdk.attach.allowAttachSelf=true' '-Dnode.environment=production' '-Dnode.id=ffffffff-ffff-ffff-ffff-ffffffffffff' '-Dnode.data-dir=/mnt/yic/presto-server-0.248/var' '-Dlog.levels-file=/mnt/yic/presto-server-0.248/etc.coordinator/log.properties' '-Dconfig=/mnt/yic/presto-server-0.248/etc.coordinator/config.properties' -Dray.address=127.0.0.1:6379
-# 'com.facebook.presto.server.PrestoOnRay'
-
-
-from typing import Optional
-
-from mypy_extensions import TypedDict
-
 
 class ConfConfig:
     def __init__(self):
@@ -49,6 +39,10 @@ def run_cmd(cmd, tmp_dir):
     o.properties = {}
     o.arguments = []
     o.verbose = True
+    node_properties = launcher.load_properties(pathjoin(o.etc_dir, "node.properties"))
+    for k, v in node_properties.items():
+        if k not in o.properties:
+            o.properties[k] = v
 
     return launcher.handle_command(cmd, o)
 
@@ -58,10 +52,11 @@ def prep_etc(tmp_dir, config, is_coordinator, discovery_uri):
     etc_dir = work_dir / "etc_dir"
     etc_dir.mkdir()
     config_prop_file = etc_dir / "config.properties"
+    port = discovery_uri.split(':')[-1]
     with config_prop_file.open(mode='w') as config_prop:
         if is_coordinator:
             config_prop.write("coordinator=true\n")
-            config_prop.write("http-server.http.port=8080\n")
+            config_prop.write(f"http-server.http.port={port}\n")
             config_prop.write("discovery-server.enabled=true")
         else:
             config_prop.write("coordinator=false\n")
@@ -72,8 +67,8 @@ def prep_etc(tmp_dir, config, is_coordinator, discovery_uri):
         config_prop.write(f"query.max-total-memory-per-node={config.query_max_total_memory_per_node}GB\n")
     node_prop_file = etc_dir / "node.properties"
     with node_prop_file.open(mode='w') as node_prop:
-        node_prop.write(f"node.id={tmp_dir}")
-        node_prop.write(f"node.environment=production")
+        node_prop.write(f"node.id={tmp_dir.encode().hex()}\n")
+        node_prop.write(f"node.environment=production\n")
 
     jvm_config_file = etc_dir / "jvm.config"
     with jvm_config_file.open(mode='w') as jvm_config:
@@ -94,25 +89,28 @@ def prep_etc(tmp_dir, config, is_coordinator, discovery_uri):
     (etc_dir / "catalog").symlink_to(Path(CATALOG_PATH), target_is_directory=True)
 
 @ray.remote
-class PrestorWorker(object):
+class PrestoWorker(object):
     def __init__(self, discovery_uri, config):
         self._config = config
         self._work_dir = tempfile.mkdtemp()
         prep_etc(self._work_dir, config, False, discovery_uri)
+        self._proc = None
 
     def status(self):
         return run_cmd("status", self._work_dir)
 
     def start(self):
-        run_cmd("start", self._work_dir)
+        self._proc = run_cmd("start", self._work_dir)
 
     def stop(self):
-        run_cmd("stop", self._work_dir)
+        if self._proc:
+            self._proc.kill()
+            self._proc.wait()
         shutil.rmtree(self._work_dir)
 
 
 @ray.remote
-class PrestorCoordinator(object):
+class PrestoCoordinator(object):
     def __init__(self, name: str, config):
         self._config = config
         self._name = name
@@ -123,36 +121,43 @@ class PrestorCoordinator(object):
         prep_etc(self._work_dir, config, True, f'http://{self.get_address()}')
         self._count = 0
         self._workers = []
+        self._proc = None
 
     def start(self):
-        run_cmd("start", self._work_dir)
+        self._prof = run_cmd("start", self._work_dir)
 
     def stop(self):
-        run_cmd("stop", self._work_dir)
+        if self._proc:
+            self._proc.kill()
+            self._proc.wait()
         shutil.rmtree(self._work_dir)
 
     def add_worker(self):
         self._count += 1
-        w = PrestorWorker.options(name=f"{self._name}.{self._count}", lifetime="detached").remote(f'http://{self.get_address()}', self._config)
+        w = PrestoWorker.options(name=f"{self._name}.{self._count}", lifetime="detached").remote(f'http://{self.get_address()}', self._config)
         ray.wait([w.start.remote()])
         self._workers.append(w)
         return len(self._workers)
 
     def del_worker(self):
         w = self._workers.pop()
-        ray.get([w.stop.remote()])
+        r = ray.get([w.stop.remote()])
         return len(self._workers)
 
     def stop(self):
-        ray.wait([w.stop.remote() for w in self._workers])
+        ray.get([w.stop.remote() for w in self._workers])
+        for w in self._workers:
+            ray.kill(w)
+        if self._proc:
+            self._proc.kill()
+            self._proc.wait()
         self._work_dir.cleanup()
 
     def get_address(self):
         return f"{self._addr}:{self._port}"
 
     def status(self):
-        return f"cluster_name: {self._name} workers: {len(self._workers)}\n\t" \
-          + run_cmd("status", self._work_dir)
+        return f"cluster_name: {self._name} workers: {len(self._workers)}"
 
 
 @ray.remote
@@ -166,7 +171,7 @@ class PrestoMetaManager(object):
     def start(self, cluster_name, config):
         if cluster_name in self._clusters:
             return
-        self._clusters[cluster_name] = PrestorCoordinator.options(name=cluster_name, lifetime="detached").remote(cluster_name, config)
+        self._clusters[cluster_name] = PrestoCoordinator.options(name=cluster_name, lifetime="detached").remote(cluster_name, config)
         return self._clusters[cluster_name].start.remote()
 
     def add_worker(self, cluster_name):
@@ -197,7 +202,7 @@ class PrestoMetaManager(object):
             raise RuntimeError(f"No such cluster: {cluster_name}")
 
 
-COMMANDS = ['add_worker', 'del_worker', 'stop', 'start', 'status', 'coordinator']
+COMMANDS = ['add_worker', 'del_worker', 'stop', 'start', 'status', 'coordinator', 'connect']
 def create_parser():
     commands = 'Commands: ' + ', '.join(COMMANDS)
     parser = OptionParser(prog='presto-mgr', usage='usage: %prog [options] command', description=commands)
@@ -212,8 +217,8 @@ def parse_options():
     (options, args) = parser.parse_args()
     if len(args) == 1 and not args[0] in set(COMMANDS):
         parser.error(f"Invalid command {args[0]}")
-    if len(args) != 1:
-        parser.error(f"Only one cmds can be used.")
+    if len(args) != 1 and args[0] != "connect":
+        parser.error(f"Only one cmds can be used. {args}")
     cmd = args[0]
     if cmd not in ("status", "stopall") and options.cluster_name is None:
         parser.error("cluster-name is required")
@@ -231,7 +236,7 @@ def parse_options():
             options.presto_config.query_max_memory_per_node = data.get("query_max_memory_per_node")
         if data.get("query_max_total_memory_per_node"):
             options.presto_config.query_max_total_memory_per_node = data.get("query_max_total_memory_per_node")
-    return (options, args[0])
+    return (options, args[0], args[1:])
 
 def get_meta_mgr():
     try:
@@ -241,7 +246,7 @@ def get_meta_mgr():
     return meta_mgr
 
 def main():
-    (options, cmd) = parse_options()
+    (options, cmd, others) = parse_options()
     ray.init(address=options.ray_addr)
 
     meta_mgr = get_meta_mgr()
@@ -260,21 +265,18 @@ def main():
     elif cmd == "start":
         ray.wait([meta_mgr.start.remote(cluster_name, options.presto_config)])
         return
-
-    if cmd == "add_worker":
+    if cmd == "connect":
+        import os
+        addr = ray.get([meta_mgr.get_address.remote(cluster_name)])[0]
+        args = [CLI_PATH] + others + ["--server", addr]
+        os.execvpe(CLI_PATH, args, env=os.environ.copy())
+        # ~/presto-cli --server 172.31.38.60:50221 --catalog mysql --scheme test
+    elif cmd == "add_worker":
         print(f"Current worker num {ray.get([meta_mgr.add_worker.remote(cluster_name)])[0]}")
     elif cmd == "del_worker":
         print(f"Current worker num {ray.get([meta_mgr.del_worker.remote(cluster_name)])[0]}")
     elif cmd == "coordinator":
         print(f"{ray.get([meta_mgr.get_address.remote(cluster_name)])[0]}")
-
-    # print(ray.get([mgr.get_address.remote()]))
-    # if cmd == 'add_worker':
-    #     mgr.add_worker.remote()
-    # elif cmd == 'del_worker':
-    #     mgr.del_worker.remote()
-    # elif cmd == 'stop':
-    #     if options.cluster_name is None:
 
     ray.shutdown()
 
