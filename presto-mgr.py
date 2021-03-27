@@ -31,10 +31,15 @@ class PrestorWorker(object):
 
 @ray.remote
 class PrestoClusterManager(object):
-    def __init__(self, config):
+    def __init__(self, cluster_name, config):
+        self._cluster_name = cluster_name
         self._config = config
         self._coordinators = []
         self._workers = []
+
+
+    def get_cluster_name(self):
+        return self._cluster_name
 
     def stats(self):
         pass
@@ -54,11 +59,7 @@ class PrestoClusterManager(object):
     def get_coordinator_addr(self):
         pass
 
-CLUSTER_NAME="presto"
-MANAGER_NAME = CLUSTER_NAME + ".mgr"
 COMMANDS = ['add_worker', 'del_worker', 'stop', 'start', 'status']
-
-
 def create_parser():
     commands = 'Commands: ' + ', '.join(COMMANDS)
     parser = OptionParser(prog='presto-mgr', usage='usage: %prog [options] command', description=commands)
@@ -81,18 +82,60 @@ def parse_options():
     cmd = args[0]
     if cmd == start and options.presto_config is None:
         parser.error(f"config is required for cmd start")
-
     return (options, args[0])
 
+def make_config(config_file):
+    pass
+
+ANYSCAL_PREFIX = "anyscale"
 
 def main():
     (options, cmd) = parse_options()
     ray.init(address=options.ray_addr)
+    cluster_name = options.cluster_name
+    mgr_name = cluster_name + "_mgr"
     try:
-        mgr = ray.get_actor(MANAGER_NAME)
+        mgr = ray.get_actor(mgr_name)
     except:
-        mgr = PrestoClusterManager.options(MANAGER_NAME, lifetime="detached").remote(None)
+        if cmd != 'start':
+            raise IOError("Server hasn't started. Please start it first.")
+        mgr = PrestoClusterManager.options(mgr_name, lifetime="detached").remote()
+        return
+
+    if cmd == 'add_worker':
+        mgr.add_worker.remote()
+    elif cmd == 'del_worker':
+        mgr.del_worker.remote()
+
     ray.shutdown()
 
 if __name__ == '__main__':
+'''
+# config_file will contain a json
+presto-mgr.py start -n presto-app -c config_file
+
+# add worker
+presto-mgr.py add_worker -n presto-app
+presto-mgr.py add_worker -n presto-app
+presto-mgr.py add_worker -n presto-app
+presto-mgr.py add_worker -n presto-app
+
+# check cluster status
+presto-mgr.py status
+
+# connect to presto cluster and run query
+presto-mgr.py connect
+
+... run some query ...
+
+presto-mgr.py del_worker -n presto-app
+presto-mgr.py del_worker -n presto-app
+
+presto-mgr.py status
+
+# stop presto app
+presto-mgr.py stop -n presto-app
+
+presto-mgr.py status
+'''
     main()
