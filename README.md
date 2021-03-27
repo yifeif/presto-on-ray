@@ -1,4 +1,4 @@
-```
+```bash
 # Usage
 > $ ./presto-mgr.py --help
 Usage: presto-mgr [options] command
