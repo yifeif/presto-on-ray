@@ -1,5 +1,22 @@
 ```
-# presto-on-ray
+# Usage
+> $ ./presto-mgr.py --help
+Usage: presto-mgr [options] command
+
+Commands: add_worker, del_worker, stop, start, status, coordinator, connect
+
+Options:
+  -h, --help            show this help message and exit
+  -n CLUSTER_NAME, --cluster-name=CLUSTER_NAME
+  -a RAY_ADDR, --ray-addr=RAY_ADDR
+  -c PRESTO_CONFIG, --config=PRESTO_CONFIG
+
+# add_worker: add a new worker to a cluster
+# del_worker: remove a worker from a cluster
+# start: start a cluster
+# status: check the staus of the cluster
+# connect: connect to a culster and do query
+
 # Start ray cluster first
 > $ ray start --head
 Local node IP: 172.31.38.60
