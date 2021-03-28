@@ -10,9 +10,9 @@ import shutil
 import json
 from pathlib import Path
 logger = logging.getLogger(__name__)
-INSTALL_PATH="/tmp/presto-server-0.248/"
-CATALOG_PATH="/tmp/presto-server-0.248/catalog"
-CLI_PATH="/tmp/presto-cli"
+INSTALL_PATH="/home/ray/presto-server-0.248/"
+CATALOG_PATH="/home/ray/presto-server-0.248/catalog"
+CLI_PATH="/home/ray/presto-cli"
 PRESTO_MGR="__presto_mgr"
 
 class ConfConfig:
