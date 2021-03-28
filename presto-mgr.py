@@ -1,4 +1,4 @@
-#! /usr/bin/python3.6
+#! /home/ray/anaconda3/bin/python
 import ray
 from optparse import OptionParser
 import socket
@@ -10,9 +10,9 @@ import shutil
 import json
 from pathlib import Path
 logger = logging.getLogger(__name__)
-INSTALL_PATH="/mnt/yic/presto-server-0.248/"
-CATALOG_PATH="/mnt/yic/presto-server-0.248/catalog"
-CLI_PATH="/mnt/yic/presto-cli"
+INSTALL_PATH="/tmp/presto-server-0.248/"
+CATALOG_PATH="/tmp/presto-server-0.248/catalog"
+CLI_PATH="/tmp/presto-cli"
 PRESTO_MGR="__presto_mgr"
 
 class ConfConfig:
