@@ -281,32 +281,4 @@ def main():
     ray.shutdown()
 
 if __name__ == '__main__':
-    '''
-# config_file will contain a json
-presto-mgr.py start -n presto-app -c config_file
-
-# add worker
-presto-mgr.py add_worker -n presto-app
-presto-mgr.py add_worker -n presto-app
-presto-mgr.py add_worker -n presto-app
-presto-mgr.py add_worker -n presto-app
-
-# check cluster status
-presto-mgr.py status
-
-# connect to presto cluster and run query
-presto-mgr.py connect
-
-... run some query ...
-
-presto-mgr.py del_worker -n presto-app
-presto-mgr.py del_worker -n presto-app
-
-presto-mgr.py status
-
-# stop presto app
-presto-mgr.py stop -n presto-app
-
-presto-mgr.py status
-    '''
     main()
